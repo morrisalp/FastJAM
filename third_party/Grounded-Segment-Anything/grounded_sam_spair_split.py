@@ -11,9 +11,17 @@ from tqdm import tqdm
 from GroundingDINO.groundingdino.util.inference import Model
 from segment_anything import sam_model_registry, SamPredictor
 
-DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+if torch.cuda.is_available():
+    DEVICE = torch.device('cuda')
+elif torch.backends.mps.is_available():
+    DEVICE = torch.device('mps')
+else:
+    DEVICE = torch.device('cpu')
+
+INFERENCE_DEVICE = DEVICE
+SAM_DEVICE = DEVICE
 SCRIPT_DIR = Path(__file__).resolve().parent
-REPO_ROOT = SCRIPT_DIR.parents[2]
+REPO_ROOT = SCRIPT_DIR.parents[1]
 
 # GroundingDINO config and checkpoint
 GROUNDING_DINO_CONFIG_PATH = SCRIPT_DIR / "GroundingDINO" / "groundingdino" / "config" / "GroundingDINO_SwinT_OGC.py"
@@ -26,11 +34,12 @@ SAM_CHECKPOINT_PATH = SCRIPT_DIR / "sam_vit_h_4b8939.pth"
 # Load models
 grounding_dino_model = Model(
     model_config_path=str(GROUNDING_DINO_CONFIG_PATH),
-    model_checkpoint_path=str(GROUNDING_DINO_CHECKPOINT_PATH)
+    model_checkpoint_path=str(GROUNDING_DINO_CHECKPOINT_PATH),
+    device=str(INFERENCE_DEVICE)
 )
 
 sam = sam_model_registry[SAM_ENCODER_VERSION](checkpoint=str(SAM_CHECKPOINT_PATH))
-sam.to(device=DEVICE)
+sam.to(device=SAM_DEVICE)
 sam_predictor = SamPredictor(sam)
 
 # Hyperparameters

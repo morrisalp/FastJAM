@@ -1,8 +1,10 @@
 # FastJAM: a Fast Joint Alignment Model for Images
 Omri Hirsch*, Ron Shapira Weber*, Shira Ifergane, and Oren Freifeld  
 
-[![arXiv](https://img.shields.io/badge/arXiv-2510.22842-b31b1b.svg?style=flat)](https://arxiv.org/abs/2510.22842)  
-[![Project Page](https://img.shields.io/badge/Project-Page-blue)](https://bgu-cs-vil.github.io/FastJAM/)  
+[![arXiv](https://img.shields.io/badge/arXiv-2510.22842-b31b1b.svg?style=flat)](https://arxiv.org/abs/2510.22842)
+[![Project Page](https://img.shields.io/badge/Project-Page-blue)](https://bgu-cs-vil.github.io/FastJAM/)
+
+> Fork changelog: [CHANGELOG.md](CHANGELOG.md)
 
 ![FastJAM teaser](website_FastJAM_teaser_video.gif)
 

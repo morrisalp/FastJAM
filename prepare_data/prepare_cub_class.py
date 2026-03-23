@@ -18,7 +18,7 @@ def run_grounded_sam(script_name: str, description: str) -> None:
 
     print(f"[Grounded-SAM] Running {description} via {script_path} ...")
     try:
-        subprocess.run([sys.executable, str(script_path)], check=True)
+        subprocess.run([sys.executable, str(script_path)], check=True, cwd=str(script_path.parent))
     except subprocess.CalledProcessError as exc:
         print(f"[Grounded-SAM] WARNING: {description} failed (exit code {exc.returncode}). See logs above.")
 
