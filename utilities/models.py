@@ -5,7 +5,8 @@ from torch_geometric.nn import SAGEConv, global_mean_pool
 
 from utilities.homography_utils import apply_homography, get_homography_matrix
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+from utilities.device_utils import get_device
+device = get_device()
 
 class SAGEHomographyNet(nn.Module):
     def __init__(self, start_with_id_matrix, matrix_exp, in_channels=2, hidden_channels=128, out_channels=8, num_layers=5):

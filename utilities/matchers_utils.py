@@ -2,6 +2,8 @@ import torch
 import torch.nn.functional as F
 import os
 import sys
+import hashlib
+import json
 import numpy as np
 import matplotlib.pyplot as plt
 import itertools
@@ -120,7 +122,7 @@ def RoMa_extract_matches_cached(roma_model, image_paths, nms_radius_prec: float,
 
     # === Create cached matcher ===
     cached_matcher = create_cached_matcher_from_roma(roma_model, device=device)
-    
+
     # === Process pairs in batches ===
     print(f"Matching {len(image_pairs)} pairs with caching and batch processing (batch_size={batch_size})...")
     for start in tqdm(range(0, len(image_pairs), batch_size), desc="Cached batch matching"):
@@ -130,46 +132,34 @@ def RoMa_extract_matches_cached(roma_model, image_paths, nms_radius_prec: float,
         ims_A = torch.stack([get_tensor(i) for (i, j) in batch_pairs], dim=0)
         ims_B = torch.stack([get_tensor(j) for (i, j) in batch_pairs], dim=0)
 
-        # Create batch for cached matcher
-        batch = {
-            "im_A": ims_A,
-            "im_B": ims_B
-        }
-        
         # Get corresps from cached matcher (batched)
         with torch.inference_mode():
-            corresps = cached_matcher.forward(batch, batched=True)
-        
+            corresps = cached_matcher.forward({"im_A": ims_A, "im_B": ims_B}, batched=True)
+
         # Process each pair in the batch
-        B = len(batch_pairs)
-        for b in range(B):
-            i, j = batch_pairs[b]
-            
+        for b, (i, j) in enumerate(batch_pairs):
             # Extract corresps for this specific pair
             pair_corresps = {}
             for scale, corresp in corresps.items():
                 if isinstance(corresp, dict):
-                    # Handle dict format
-                    pair_corresp = {}
-                    for key, value in corresp.items():
-                        if isinstance(value, torch.Tensor) and value.dim() > 2:
-                            pair_corresp[key] = value[b:b+1]  # Keep batch dimension
-                        else:
-                            pair_corresp[key] = value
-                    pair_corresps[scale] = pair_corresp
+                    pair_corresps[scale] = {
+                        k: v[b:b+1] if isinstance(v, torch.Tensor) and v.dim() > 2 else v
+                        for k, v in corresp.items()
+                    }
                 else:
-                    # Handle tensor format
-                    if isinstance(corresp, torch.Tensor) and corresp.dim() > 2:
-                        pair_corresps[scale] = corresp[b:b+1]  # Keep batch dimension
-                    else:
-                        pair_corresps[scale] = corresp
-            
-            # Process corresps to get warp and certainty
+                    pair_corresps[scale] = corresp[b:b+1] if isinstance(corresp, torch.Tensor) and corresp.dim() > 2 else corresp
+
             warp, certainty = cached_matcher.process_corresps_to_warp_certainty(pair_corresps, H, W, device)
-            
+
+            certainty = torch.nan_to_num(certainty, nan=0.0, posinf=1.0, neginf=0.0).clamp(0.0, 1.0)
+
+            if certainty.reshape(-1).sum() <= 0:
+                matched_keypoints_by_pair[(i, j)] = (np.zeros((0, 2)), np.zeros((0, 2)))
+                continue
+
             # Sample matches for this specific pair
             matches, conf = roma_model.sample(warp, certainty)
-            
+
             # Convert to pixel coordinates
             kptsA, kptsB = roma_model.to_pixel_coordinates(matches, H, W, H, W)
             kptsA = kptsA.detach().cpu().numpy()
@@ -192,7 +182,6 @@ def RoMa_extract_matches_cached(roma_model, image_paths, nms_radius_prec: float,
                     kptsB = kptsB[valid]
                     mconf = mconf[valid]
                 else:
-                    # no valid points left
                     kptsA = kptsA[:0]
                     kptsB = kptsB[:0]
                     mconf = mconf[:0]
@@ -213,6 +202,10 @@ def RoMa_extract_matches_cached(roma_model, image_paths, nms_radius_prec: float,
                     mconf = mconf[order]
 
             matched_keypoints_by_pair[(i, j)] = (kptsA, kptsB)
+
+        # Free MPS memory after each batch
+        if torch.backends.mps.is_available():
+            torch.mps.empty_cache()
 
     # Print cache statistics
     cache_stats = cached_matcher.get_cache_stats()
@@ -242,6 +235,8 @@ def RoMa_extract_matches_cached(roma_model, image_paths, nms_radius_prec: float,
     _gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
+    elif torch.backends.mps.is_available():
+        torch.mps.empty_cache()
 
     return matched_keypoints_by_pair
 
@@ -379,3 +374,46 @@ def create_mask_and_kps_matrix(matched_keypoints_by_pair, B, device, image_size=
         mask[j, i, :n] = True
 
     return kps_matrix, mask
+
+
+def matches_cache_key(image_paths: list, config: dict) -> str:
+    """Compute a cache key from image paths (names + mtimes) and matching params."""
+    h = hashlib.sha256()
+    for p in sorted(image_paths):
+        h.update(os.path.basename(p).encode())
+        mtime = os.path.getmtime(p) if os.path.exists(p) else 0
+        h.update(str(mtime).encode())
+    params = {k: config[k] for k in ("roma_coarse_res", "roma_upsample_res", "nms_radius_prec", "max_keypoints")}
+    h.update(json.dumps(params, sort_keys=True).encode())
+    return h.hexdigest()
+
+
+def save_matches_cache(cache_path: str, cache_key: str, matched_keypoints_by_pair: dict, image_size):
+    """Save matched keypoints to a .npz file with a cache key."""
+    arrays = {"__key__": np.array([cache_key]), "__image_size__": np.array(image_size)}
+    for (i, j), (kpsA, kpsB) in matched_keypoints_by_pair.items():
+        arrays[f"kpsA_{i}_{j}"] = kpsA
+        arrays[f"kpsB_{i}_{j}"] = kpsB
+    np.savez(cache_path, **arrays)
+    print(f"Saved matches cache: {cache_path}")
+
+
+def load_matches_cache(cache_path: str, cache_key: str):
+    """Load matches from cache if the key matches. Returns dict or None."""
+    if not os.path.exists(cache_path):
+        return None
+    try:
+        data = np.load(cache_path, allow_pickle=False)
+        if str(data["__key__"][0]) != cache_key:
+            print("Match cache key mismatch, recomputing.")
+            return None
+        result = {"__image_size__": tuple(data["__image_size__"].tolist())}
+        for key in data.files:
+            if key.startswith("kpsA_"):
+                _, i, j = key.split("_", 2)
+                i, j = int(i), int(j)
+                result[(i, j)] = (data[f"kpsA_{i}_{j}"], data[f"kpsB_{i}_{j}"])
+        return result
+    except Exception as e:
+        print(f"Failed to load match cache ({e}), recomputing.")
+        return None

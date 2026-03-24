@@ -5,7 +5,8 @@ from collections import defaultdict
 import itertools
 import numpy as np
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+from .device_utils import get_device
+device = get_device()
 
 def _normalize_keypoints_RoMa(coords, image_size):
     """
@@ -135,7 +136,11 @@ def build_graph_from_fused_keypoints(fused_keypoints, fused_batches, orig_to_fus
         unique_keys = torch.unique(keys, sorted=True)
         edge_u_unique = (unique_keys // num_nodes).to(device, non_blocking=True)
         edge_v_unique = (unique_keys %  num_nodes).to(device, non_blocking=True)
-        edge_index_new = torch.stack([edge_u_unique, edge_v_unique], dim=0)
+        # Filter out any recovered indices that are out of bounds (encoding artefacts)
+        valid = (edge_u_unique >= 0) & (edge_u_unique < num_nodes) & \
+                (edge_v_unique >= 0) & (edge_v_unique < num_nodes) & \
+                (edge_u_unique != edge_v_unique)
+        edge_index_new = torch.stack([edge_u_unique[valid], edge_v_unique[valid]], dim=0)
         # Cleanup CPU temporaries
         del keys, unique_keys
     else:

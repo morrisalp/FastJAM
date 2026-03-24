@@ -13,7 +13,8 @@ from .models import SAGEHomographyNet
 from .matchers_utils import create_mask_and_kps_matrix
 from .loss_functions import congealing_loss_pair_normalized, optimize_reflections_coord_descent_matrix
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+from .device_utils import get_device
+device = get_device()
 
 def _reflect_keypoints_matrix(kps_matrix):
     """
@@ -48,7 +49,7 @@ def train_gnn_reflections_matrix(model_gcn: SAGEHomographyNet, graph_data, match
     loss_history_gcn = []
 
     graph_data = graph_data.clone().detach().to(device)
-    B = int(graph_data.batch.max().item()) + 1
+    B = len(image_paths)
 
     kps_matrix, mask = create_mask_and_kps_matrix(matched_keypoints_by_pair, B, device, image_size)
     kps_reflected_matrix = _reflect_keypoints_matrix(kps_matrix)

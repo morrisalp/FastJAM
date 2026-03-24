@@ -1,4 +1,5 @@
 import os
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 import gc
 import sys
 import time
@@ -31,8 +32,9 @@ from utilities.graph_utils import (
     build_graph_from_matches_RoMa,
     build_graph_from_fused_keypoints,
 )
-from utilities.matchers_utils import RoMa_extract_matches_cached, to_masked_path
+from utilities.matchers_utils import RoMa_extract_matches_cached, to_masked_path, save_matches_cache, load_matches_cache, matches_cache_key
 from utilities.clustering_utils import dpmeans_clustering
+from utilities.device_utils import get_device
 
 from transformers.reflection_transformer import ReflectionTransformer
 from transformers.sequence_transformer import SequenceTransformer
@@ -79,7 +81,7 @@ def main():
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
-    device = torch.device(f"cuda:{torch.cuda.current_device()}" if torch.cuda.is_available() else "cpu")
+    device = get_device()
 
     parser = get_argparser()
     config = init_config(parser)
@@ -93,21 +95,29 @@ def main():
 
     if config['seed'] != -1:
         seed_everything(config['seed'])
-    # RoMa matcher
-    roma_model = roma_outdoor(device=device, coarse_res=config['roma_coarse_res'], upsample_res=config['roma_upsample_res'])
-    start = time.time()
-    matched_keypoints_by_pair = {}
-    image_size = roma_model.get_output_resolution()
-
     image_dir = f"{config['data_folder']}/images"
     image_paths = [os.path.join(image_dir, x) for x in sorted(os.listdir(image_dir))]
     image_paths_masked = [to_masked_path(p) for p in image_paths]
-    matched_keypoints_by_pair = RoMa_extract_matches_cached(roma_model, image_paths, config['nms_radius_prec'], config['max_keypoints'], config['roma_batch_size'], device=device)
-    del roma_model
-    gc.collect()
-    torch.cuda.empty_cache()
-    end = time.time()
-    print(f"RoMa matches: {end - start:.3f} seconds")
+
+    # RoMa matcher (with disk cache)
+    cache_path = os.path.join(config['data_folder'], ".matches_cache.npz")
+    cache_key = matches_cache_key(image_paths, config)
+    matched_keypoints_by_pair = load_matches_cache(cache_path, cache_key)
+
+    if matched_keypoints_by_pair is None:
+        roma_model = roma_outdoor(device=device, coarse_res=config['roma_coarse_res'], upsample_res=config['roma_upsample_res'])
+        image_size = roma_model.get_output_resolution()
+        start = time.time()
+        matched_keypoints_by_pair = RoMa_extract_matches_cached(roma_model, image_paths, config['nms_radius_prec'], config['max_keypoints'], config['roma_batch_size'], device=device)
+        end = time.time()
+        print(f"RoMa matches: {end - start:.3f} seconds")
+        save_matches_cache(cache_path, cache_key, matched_keypoints_by_pair, image_size)
+        del roma_model
+        gc.collect()
+        torch.cuda.empty_cache()
+    else:
+        print(f"Loaded matches from cache: {cache_path}")
+        image_size = matched_keypoints_by_pair.pop("__image_size__")
     # Graph
     graph_data, image_kpts_coords = build_graph_from_matches_RoMa(
             matched_keypoints_by_pair, image_size, device=device

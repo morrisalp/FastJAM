@@ -52,7 +52,7 @@ def roma_model(
     if isinstance(upsample_res, int):
         upsample_res = (upsample_res, upsample_res)
 
-    if str(device) == "cpu":
+    if str(device) == "cpu" or str(device) == "mps":
         amp_dtype = torch.float32
 
     assert resolution[0] % 14 == 0, "Needs to be multiple of 14 for backbone"

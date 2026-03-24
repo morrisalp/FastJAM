@@ -3,9 +3,10 @@ import torch.nn.functional as F
 from torch_geometric.data import Data
 import numpy as np
 from typing import Dict, Tuple
-from pdc_dp_means import DPMeans
+from utilities.dp_means import DPMeans
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+from .device_utils import get_device
+device = get_device()
 
 def dpmeans_clustering(keypoints: torch.Tensor, 
                           batch: torch.Tensor, 
@@ -66,7 +67,7 @@ def dpmeans_clustering(keypoints: torch.Tensor,
             cluster_center = cluster_centers[cluster_id]
             
             # Create new fused node for this cluster
-            all_means.append(torch.tensor(cluster_center, device=device).unsqueeze(0))
+            all_means.append(torch.tensor(cluster_center, dtype=torch.float32, device=device).unsqueeze(0))
             all_batches.append(torch.tensor([int(b)], device=device))
             
             # Map all original indices in this cluster to the same fused node

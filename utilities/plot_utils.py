@@ -13,7 +13,8 @@ from transformers.reflection_transformer import ReflectionTransformer
 from transformers.sequence_transformer import SequenceTransformer
 from transformers.homography_transformer import HomographyTransformer
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+from .device_utils import get_device
+device = get_device()
 
 def plot_warped_grid_images_canonical_single(image_paths, model, graph_data, image_size,
                                              stn_n, best_reflections, dpi=150, save_path=None):
