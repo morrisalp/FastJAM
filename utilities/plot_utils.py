@@ -41,15 +41,19 @@ def plot_warped_grid_images_canonical_single(image_paths, model, graph_data, ima
         transform(Image.open(path).convert("RGB")) for path in image_paths
     ]).to(device)
 
+    # Use actual image dimensions (may differ from RoMa resolution)
+    _, _, img_H, img_W = images_tensor.shape
+    actual_size = (img_H, img_W)
+
     # === Step 3: Warp and plot each image ===
     for i in range(B):
         img_tensor = images_tensor[i].unsqueeze(0)  # shape: (1, 3, H, W)
 
         transformer = SequenceTransformer(
             [
-                ReflectionTransformer(image_size, best_reflections[i].unsqueeze(0)),
-                HomographyTransformer(image_size, torch.linalg.inv(thetas[i]).unsqueeze(0), lie_algebra=False),
-                HomographyTransformer(image_size, avg_theta.unsqueeze(0), lie_algebra=False),
+                ReflectionTransformer(actual_size, best_reflections[i].unsqueeze(0)),
+                HomographyTransformer(actual_size, torch.linalg.inv(thetas[i]).unsqueeze(0), lie_algebra=False),
+                HomographyTransformer(actual_size, avg_theta.unsqueeze(0), lie_algebra=False),
             ],
             combine_transformations=True
         )
@@ -66,6 +70,91 @@ def plot_warped_grid_images_canonical_single(image_paths, model, graph_data, ima
             plt.close(fig)
         else:
             plt.show()
+
+def plot_alignment_overview(image_paths, model, graph_data, image_size,
+                            stn_n, best_reflections, save_path=None, max_cols=10):
+    """
+    Two-row overview figure: top row = original images, bottom row = aligned to canonical.
+    Saved as a single PNG at save_path (directory or full file path).
+    """
+    device = graph_data.x.device
+    B = len(image_paths)
+
+    model.eval()
+    with torch.no_grad():
+        thetas = model.forward_n(graph_data, stn_n)
+
+    avg_theta = thetas.mean(dim=0)
+
+    transform = transforms.Compose([transforms.ToTensor()])
+    images_tensor = torch.stack([
+        transform(Image.open(path).convert("RGB")) for path in image_paths
+    ]).to(device)
+
+    _, _, img_H, img_W = images_tensor.shape
+    actual_size = (img_H, img_W)
+
+    # Warp all images
+    warped = []
+    for i in range(B):
+        img_tensor = images_tensor[i].unsqueeze(0)
+        transformer = SequenceTransformer(
+            [
+                ReflectionTransformer(actual_size, best_reflections[i].unsqueeze(0)),
+                HomographyTransformer(actual_size, torch.linalg.inv(thetas[i]).unsqueeze(0), lie_algebra=False),
+                HomographyTransformer(actual_size, avg_theta.unsqueeze(0), lie_algebra=False),
+            ],
+            combine_transformations=True
+        )
+        w = transformer(img_tensor)
+        warped.append((w.squeeze(0).permute(1, 2, 0).clamp(0, 1).cpu().numpy() * 255).astype(np.uint8))
+
+    originals = [(images_tensor[i].permute(1, 2, 0).clamp(0, 1).cpu().numpy() * 255).astype(np.uint8)
+                 for i in range(B)]
+
+    n_cols = min(B, max_cols)
+    n_rows_per_block = (B + n_cols - 1) // n_cols  # rows needed per block
+    cell = img_W / 100  # figure inches per cell
+
+    fig, axes = plt.subplots(
+        2 * n_rows_per_block, n_cols,
+        figsize=(n_cols * cell, 2 * n_rows_per_block * cell * (img_H / img_W)),
+        squeeze=False
+    )
+
+    for idx in range(B):
+        row_block = idx // n_cols
+        col = idx % n_cols
+        axes[row_block][col].imshow(originals[idx])
+        axes[row_block][col].axis("off")
+        axes[n_rows_per_block + row_block][col].imshow(warped[idx])
+        axes[n_rows_per_block + row_block][col].axis("off")
+
+    # Hide unused cells
+    for idx in range(B, n_rows_per_block * n_cols):
+        row_block = idx // n_cols
+        col = idx % n_cols
+        axes[row_block][col].axis("off")
+        axes[n_rows_per_block + row_block][col].axis("off")
+
+    # Row labels
+    axes[0][0].set_title("Before", fontsize=8, loc="left", pad=2)
+    axes[n_rows_per_block][0].set_title("After", fontsize=8, loc="left", pad=2)
+
+    plt.tight_layout(pad=0.3)
+
+    if save_path is not None:
+        if os.path.splitext(save_path)[1] in (".png", ".jpg", ".pdf"):
+            out_file = save_path
+        else:
+            os.makedirs(save_path, exist_ok=True)
+            out_file = os.path.join(save_path, "alignment_overview.png")
+        fig.savefig(out_file, bbox_inches="tight", dpi=150)
+        plt.close(fig)
+        print(f"Saved alignment overview: {out_file}")
+    else:
+        plt.show()
+
 
 def plot_warped_grid_images_ref_single(image_paths, model, graph_data, image_size, stn_n, ref,
                                        save_path=None, best_reflections=None, dpi=150):
@@ -92,16 +181,20 @@ def plot_warped_grid_images_ref_single(image_paths, model, graph_data, image_siz
         transform(Image.open(path).convert("RGB")) for path in image_paths
     ]).to(device)
 
+    # Use actual image dimensions (may differ from RoMa resolution)
+    _, _, img_H, img_W = images_tensor.shape
+    actual_size = (img_H, img_W)
+
     # Step 3: Warp and plot each image
     for i in range(B):
         img_tensor = images_tensor[i].unsqueeze(0)  # shape: (1, 3, H, W)
 
         transformer = SequenceTransformer(
             [
-                ReflectionTransformer(image_size, best_reflections[i].unsqueeze(0)),
-                HomographyTransformer(image_size, torch.linalg.inv(thetas[i]).unsqueeze(0), lie_algebra=False),
-                HomographyTransformer(image_size, thetas[ref].unsqueeze(0), lie_algebra=False),
-                ReflectionTransformer(image_size, best_reflections[ref].unsqueeze(0)),
+                ReflectionTransformer(actual_size, best_reflections[i].unsqueeze(0)),
+                HomographyTransformer(actual_size, torch.linalg.inv(thetas[i]).unsqueeze(0), lie_algebra=False),
+                HomographyTransformer(actual_size, thetas[ref].unsqueeze(0), lie_algebra=False),
+                ReflectionTransformer(actual_size, best_reflections[ref].unsqueeze(0)),
             ],
             combine_transformations=True
         )

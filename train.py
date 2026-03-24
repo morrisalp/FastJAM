@@ -26,6 +26,7 @@ from utilities.models import SAGEHomographyNet
 from utilities.plot_utils import (
     plot_warped_grid_images_canonical_single,
     plot_warped_grid_images_ref_single,
+    plot_alignment_overview,
 )
 from utilities.train_utils import train_gnn_reflections_matrix
 from utilities.graph_utils import (
@@ -97,7 +98,8 @@ def main():
         seed_everything(config['seed'])
     image_dir = f"{config['data_folder']}/images"
     image_paths = [os.path.join(image_dir, x) for x in sorted(os.listdir(image_dir))]
-    image_paths_masked = [to_masked_path(p) for p in image_paths]
+    image_paths_masked = [m if os.path.exists(m) else p for p, m in
+                          ((p, to_masked_path(p)) for p in image_paths)]
 
     # RoMa matcher (with disk cache)
     cache_path = os.path.join(config['data_folder'], ".matches_cache.npz")
@@ -183,12 +185,16 @@ def main():
             transform(Image.open(path).convert("RGB")) for path in image_paths
         ]).to(device)
 
+        # Use actual image dimensions (may differ from RoMa resolution)
+        _, _, img_H, img_W = images_tensor.shape
+        actual_size = (img_H, img_W)
+
         # Compose transformations per image
         transformers = [
             SequenceTransformer(
                 [
-                    ReflectionTransformer(image_size, best_reflection.unsqueeze(0)),
-                    HomographyTransformer(image_size, (torch.linalg.inv(theta)).unsqueeze(0), lie_algebra=False)
+                    ReflectionTransformer(actual_size, best_reflection.unsqueeze(0)),
+                    HomographyTransformer(actual_size, (torch.linalg.inv(theta)).unsqueeze(0), lie_algebra=False)
                 ],
                 combine_transformations=True
             )
@@ -215,6 +221,9 @@ def main():
     
     # Visualize Results
     if config['visualize_results']:
+        plot_alignment_overview(image_paths_masked, model, fused_graph, image_size,
+                                config['stn_n'], best_reflections,
+                                save_path=f"{config['results_dir']}/alignment_overview.png")
         plot_warped_grid_images_canonical_single(image_paths_masked, model, fused_graph, image_size,
                                                 config['stn_n'], best_reflections,
                                                 dpi=150,
